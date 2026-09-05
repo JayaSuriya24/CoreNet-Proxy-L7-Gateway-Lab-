@@ -290,18 +290,31 @@ function startBackend(def) {
 
   server.keepAliveTimeout = 30_000;
   server.headersTimeout   = 35_000;
-  server.on('error', (err) => log('🔥', 'ERROR', `backend ${def.name} error: ${err.message}`));
 
   state.server = server;
   backendRuntime.set(def.name, state);
 
-  return new Promise((resolve) => {
-    // Bind to loopback only. These ports must never be reachable from outside
-    // the host -- the gateway is the sole ingress.
-    server.listen(def.port, '127.0.0.1', () => {
+  return new Promise((resolve, reject) => {
+    // A listen failure must REJECT, not just log. Resolving only on 'listening'
+    // means EADDRINUSE leaves this promise pending forever, so the awaiting
+    // Promise.all() in main() never settles and the gateway silently never
+    // starts -- a hang with no error, which is far worse than a crash.
+    const onError = (err) => {
+      server.removeListener('listening', onListening);
+      reject(Object.assign(err, { backendName: def.name, backendPort: def.port }));
+    };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      // From here on, runtime errors are logged rather than fatal.
+      server.on('error', (err) => log('🔥', 'ERROR', `backend ${def.name} error: ${err.message}`));
       log('🟢', 'BOOT', `Origin ${ANSI.bold}${def.name}${ANSI.reset} listening on http://127.0.0.1:${def.port} ${ANSI.grey}(pool=${def.pool}, plaintext HTTP/1.1)${ANSI.reset}`);
       resolve(server);
-    });
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    // Bind to loopback only. These ports must never be reachable from outside
+    // the host -- the gateway is the sole ingress.
+    server.listen(def.port, '127.0.0.1');
   });
 }
 
@@ -1025,7 +1038,17 @@ async function main() {
 
   if (CONFIG.startBackends) {
     log('🚀', 'BOOT', 'Starting internal origin fleet (plaintext HTTP/1.1, loopback only)…');
-    await Promise.all(BACKENDS.map(startBackend));
+    try {
+      await Promise.all(BACKENDS.map(startBackend));
+    } catch (err) {
+      log('🔥', 'ERROR', `Origin ${err.backendName} could not bind port ${err.backendPort}: ${err.code || err.message}`);
+      if (err.code === 'EADDRINUSE') {
+        console.error(`\n  Port ${err.backendPort} is already taken — another CoreNet-Proxy is probably still running.`);
+        console.error(`  Find it with:  lsof -nP -iTCP:${err.backendPort} -sTCP:LISTEN`);
+        console.error(`  Or start this instance without origins:  node gateway.js --no-backends\n`);
+      }
+      process.exit(1);
+    }
   } else {
     log('⏭️ ', 'BOOT', 'Skipping backends (--no-backends): expecting an external origin fleet.');
   }

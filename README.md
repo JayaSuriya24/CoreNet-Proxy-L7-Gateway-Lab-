@@ -463,4 +463,22 @@ Each of these is a one-line change that teaches something:
 - Delete the hop-by-hop filter in `buildDownstreamHeaders()`. The origin's `connection: keep-alive` now reaches an h2 stream: `ERR_HTTP2_INVALID_CONNECTION_HEADERS`.
 - Set `ALPNProtocols: ['http/1.1']` and rerun 4.5 with `--http2`. Multiplexing disappears; the timing collapses back to 3.6 s.
 - Remove `allowHTTP1: true` and run 4.7. Legacy clients are locked out entirely.
-- Point a target at a port with nothing on it and watch the retry path: `🔁 L7-LB ECONNREFUSED — replaying onto the next Round-Robin target`.
+- Point a target at a port with nothing on it and watch the retry path. Verified with a 4-target pool where one target was a black hole: **every** client request still returned 200, the pool absorbed exactly **one** failure, and the dead target was marked down and skipped from then on.
+
+  ```
+  ⚖️  L7-LB  Round-Robin selected api-ghost(127.0.0.1:9999) (cursor now 0/4)
+  💔 HEALTH  api-ghost(127.0.0.1:9999) marked UNHEALTHY after ECONNREFUSED (passive detection)
+  🔁 L7-LB  ECONNREFUSED on api-ghost — replaying onto the next Round-Robin target (safe: GET with no streamed body)
+  ```
+
+  Note the retry guard: it only replays `GET`/`HEAD`/`OPTIONS`, and only when no
+  request body has been streamed upstream yet. Replaying a `POST` that the origin
+  may already have partly processed is how a proxy silently double-charges a
+  customer, so the correct behaviour is to surface the 502 instead.
+
+- Start a second instance while the first is running. You get a clear `EADDRINUSE`
+  message and exit code 1. Getting this wrong is instructive: `startBackend()`
+  originally resolved only on `'listening'`, so a bind failure left the promise
+  pending forever and `await Promise.all(...)` in `main()` never settled — the
+  process just sat there, having printed an error but never starting the gateway.
+  A hang with no explanation is strictly worse than a crash.
