@@ -1,0 +1,9 @@
+# TLS material — never commit private keys
+*.pem
+*.key
+*.crt
+*.csr
+
+node_modules/
+*.log
+.DS_Store

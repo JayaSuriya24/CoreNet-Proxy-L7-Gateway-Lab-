@@ -1,0 +1,16 @@
+{
+  "name": "corenet-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A native Node.js Layer 7 reverse proxy and load balancer: TCP/TLS 1.3 termination, HTTP/2 multiplexing, DNS/SNI, and Round-Robin backend routing. Zero dependencies.",
+  "main": "gateway.js",
+  "scripts": {
+    "start": "node gateway.js",
+    "certs": "openssl req -x509 -nodes -newkey rsa:2048 -sha256 -days 365 -keyout key.pem -out cert.pem -subj \"/C=IN/ST=Tamil Nadu/L=Chennai/O=CoreNet Labs/OU=Edge Gateway/CN=corenet.local\" -addext \"subjectAltName=DNS:corenet.local,DNS:api.corenet.local,DNS:static.corenet.local,DNS:localhost,IP:127.0.0.1\" -addext \"basicConstraints=critical,CA:FALSE\" -addext \"keyUsage=critical,digitalSignature,keyEncipherment\" -addext \"extendedKeyUsage=serverAuth\"",
+    "demo:mux": "curl -sk --http2 --parallel -o /dev/null https://localhost:8443/api/s1?delay=1200 -o /dev/null https://localhost:8443/api/s2?delay=1200 -o /dev/null https://localhost:8443/api/s3?delay=1200 -o /dev/null https://localhost:8443/api/s4?delay=1200 -o /dev/null https://localhost:8443/api/s5?delay=1200",
+    "demo:hol": "curl -sk --http1.1 -o /dev/null https://localhost:8443/api/a?delay=1200 -o /dev/null https://localhost:8443/api/b?delay=1200 -o /dev/null https://localhost:8443/api/c?delay=1200"
+  },
+  "engines": { "node": ">=18.0.0" },
+  "dependencies": {},
+  "license": "MIT"
+}
