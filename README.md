@@ -412,8 +412,23 @@ curl -sk --http2 --max-time 1 "https://localhost:8443/api/slow?delay=8000"
 ✂️ L7-H2  [c#21 s#1] Client cancelled — sending RST/abort upstream (no orphaned backend work)
 ```
 
+```
+✂️ L7-H2     [c#1 s#1] Client cancelled — sending RST/abort upstream (no orphaned backend work)
+🧯 UPSTREAM  [c#1 s#1] Upstream socket torn down by us after client cancellation (ECONNRESET — api-alpha NOT penalised)
+```
+
 A proxy that ignores this keeps doing work nobody will read. At scale that is
 how a load balancer melts down behind a client-side timeout storm.
+
+**The trap hiding in that second line.** Cancelling means calling
+`upstreamReq.destroy()` — which comes back to your own error handler as an
+`ECONNRESET`. If you treat every `ECONNRESET` as evidence of a sick origin
+(a very natural thing to write), you will mark down a backend that did nothing
+wrong. A client-side timeout storm then walks the entire fleet out of rotation
+and you have converted a client problem into a total outage. `forward()` carries
+a `clientAborted` flag specifically to tell "the origin died" apart from "we hung
+up on the origin". Verified: three cancellations in a row leave all five targets
+at `healthy=true, failures=0`.
 
 ### 4.10 — Edge-terminated endpoints
 

@@ -674,9 +674,14 @@ function forward(req, res, ctx, pool, tag, t0, excluded, attempt) {
   });
 
   target.inFlight += 1;
-  let responded   = false;
-  let bodyStarted = false;
-  let settled     = false;
+  let responded     = false;
+  let bodyStarted   = false;
+  let settled       = false;
+  // Set when WE tear down the upstream because the client walked away. Without
+  // this flag, our own destroy() surfaces as an ECONNRESET on upstreamReq and
+  // the error handler below would blame a perfectly healthy origin -- so a
+  // client-side timeout storm would mark the whole fleet unhealthy.
+  let clientAborted = false;
 
   const release = () => {
     if (settled) return;
@@ -748,6 +753,18 @@ function forward(req, res, ctx, pool, tag, t0, excluded, attempt) {
 
   upstreamReq.on('error', (err) => {
     release();
+
+    // Self-inflicted teardown after a client cancellation is not upstream
+    // evidence. Do not count it as a failure, do not mark the target down,
+    // and do not try to write a 502 onto a stream that is already gone.
+    if (clientAborted) {
+      log('🧯', 'UPSTREAM',
+        `Upstream socket torn down by us after client cancellation ` +
+        `${ANSI.grey}(${err.code || err.message} — ${target.name} NOT penalised)${ANSI.reset}`,
+        tag);
+      return;
+    }
+
     target.failures += 1;
     target.lastError = err.message;
 
@@ -780,6 +797,7 @@ function forward(req, res, ctx, pool, tag, t0, excluded, attempt) {
   // work instead of letting it run to completion into a dead socket.
   res.on('close', () => {
     if (!res.writableEnded && !upstreamReq.destroyed) {
+      clientAborted = true;
       log('✂️ ', isStreamTag(tag) ? 'L7-H2' : 'L7-H1',
         `Client cancelled — sending RST/abort upstream ${ANSI.grey}(no orphaned backend work)${ANSI.reset}`, tag);
       upstreamReq.destroy();
